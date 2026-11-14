@@ -16,7 +16,7 @@ jobs:
           T=$(date -u +%Y-%m-%dT%H:%M:%SZ); M=$(date -u +%Y-%m)
           S=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://waw.kz/)
           START=$(date +%s%3N); A=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://waw.kz/api/health); END=$(date +%s%3N)
-          F=history/$M.json; [ -f "$F" ] || echo '[]' > "$F"
+          mkdir -p history; F=history/$M.json; [ -f "$F" ] || echo '[]' > "$F"
           node -e "const fs=require('fs');const f='$F';const a=JSON.parse(fs.readFileSync(f,'utf8'));a.push({t:'$T',site:+'$S',api:+'$A',ms:$((END-START))});fs.writeFileSync(f,JSON.stringify(a))"
           node -e "const fs=require('fs');const months=fs.readdirSync('history').filter(x=>x.endsWith('.json')).sort();let all=[];for(const m of months)all=all.concat(JSON.parse(fs.readFileSync('history/'+m,'utf8')));const last=all.slice(-4320);const up=last.filter(x=>x.site===200&&x.api===200).length;const s={updated:'$T',checks:last.length,uptime_30d:last.length?+(up/last.length*100).toFixed(2):null,last:last.slice(-1)[0]||null,avg_ms:last.length?Math.round(last.reduce((a,x)=>a+x.ms,0)/last.length):null};fs.writeFileSync('summary.json',JSON.stringify(s))"
       - name: Commit
