@@ -8,4 +8,4 @@
 Independent uptime monitor for waw.kz: a GitHub Actions job checks the site and API every 5 minutes and commits the results here. History is public and cannot be altered by the service itself.
 
 
-Ескерту (Telegram): репо secrets ішінде  және  болса, сайт құлағанда және қайта көтерілгенде хабар келеді; резервтік көшірме 30 сағаттан ескірсе күніне бір рет ескертеді. Әр жазбада  (API дерекқорды тексерді ме) өрісі бар.
+Ескерту (Telegram): репо secrets ішінде `TELEGRAM_BOT_TOKEN` және `TELEGRAM_CHAT_ID` болса, сайт құлағанда және қайта көтерілгенде хабар келеді; резервтік көшірме 30 сағаттан ескірсе күніне бір рет ескертеді. Әр жазбада `db` (API дерекқорды тексерді ме) өрісі бар.
