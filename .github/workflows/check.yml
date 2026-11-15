@@ -1,25 +1,59 @@
 name: check
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 permissions:
   contents: write
+concurrency:
+  group: check
+  cancel-in-progress: false
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - name: Probe waw.kz
+        id: probe
         run: |
           set +e
           T=$(date -u +%Y-%m-%dT%H:%M:%SZ); M=$(date -u +%Y-%m)
           S=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://waw.kz/)
-          START=$(date +%s%3N); A=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 https://waw.kz/api/health); END=$(date +%s%3N)
+          START=$(date +%s%3N); A=$(curl -s -o /tmp/h.json -w '%{http_code}' --max-time 20 https://waw.kz/api/health); END=$(date +%s%3N)
+          DB=$(node -e "try{const j=require('/tmp/h.json');console.log(j.db===false?'fail':'ok')}catch{console.log('?')}")
+          BK=$(node -e "try{const j=require('/tmp/h.json');console.log(j.backup_h==null?'':j.backup_h)}catch{console.log('')}")
           mkdir -p history; F=history/$M.json; [ -f "$F" ] || echo '[]' > "$F"
-          node -e "const fs=require('fs');const f='$F';const a=JSON.parse(fs.readFileSync(f,'utf8'));a.push({t:'$T',site:+'$S',api:+'$A',ms:$((END-START))});fs.writeFileSync(f,JSON.stringify(a))"
-          node -e "const fs=require('fs');const months=fs.readdirSync('history').filter(x=>x.endsWith('.json')).sort();let all=[];for(const m of months)all=all.concat(JSON.parse(fs.readFileSync('history/'+m,'utf8')));const last=all.slice(-4320);const up=last.filter(x=>x.site===200&&x.api===200).length;const s={updated:'$T',checks:last.length,uptime_30d:last.length?+(up/last.length*100).toFixed(2):null,last:last.slice(-1)[0]||null,avg_ms:last.length?Math.round(last.reduce((a,x)=>a+x.ms,0)/last.length):null};fs.writeFileSync('summary.json',JSON.stringify(s))"
+          node -e "const fs=require('fs');const f='$F';const a=JSON.parse(fs.readFileSync(f,'utf8'));a.push({t:'$T',site:+'$S',api:+'$A',ms:$((END-START)),db:'$DB'});fs.writeFileSync(f,JSON.stringify(a))"
+          node -e "const fs=require('fs');const months=fs.readdirSync('history').filter(x=>x.endsWith('.json')).sort();let all=[];for(const m of months)all=all.concat(JSON.parse(fs.readFileSync('history/'+m,'utf8')));const last=all.slice(-8640);const up=last.filter(x=>x.site===200&&x.api===200).length;const s={updated:'$T',checks:last.length,uptime_30d:last.length?+(up/last.length*100).toFixed(2):null,last:last.slice(-1)[0]||null,avg_ms:last.length?Math.round(last.reduce((a,x)=>a+x.ms,0)/last.length):null,backup_h:'$BK'===''?null:+'$BK'};fs.writeFileSync('summary.json',JSON.stringify(s))"
+          OK=1; [ "$S" = 200 ] && [ "$A" = 200 ] || OK=0
+          PREV=$(node -e "const fs=require('fs');const a=JSON.parse(fs.readFileSync('$F','utf8'));const p=a[a.length-2];console.log(p?(p.site===200&&p.api===200?1:0):1)")
+          echo "ok=$OK" >> "$GITHUB_OUTPUT"; echo "prev=$PREV" >> "$GITHUB_OUTPUT"; echo "site=$S" >> "$GITHUB_OUTPUT"; echo "api=$A" >> "$GITHUB_OUTPUT"; echo "bk=$BK" >> "$GITHUB_OUTPUT"
+          echo "site=$S api=$A db=$DB backup_h=$BK ms=$((END-START))"
+      - name: Alert (Telegram) on failure or recovery
+        if: ${{ steps.probe.outputs.ok != steps.probe.outputs.prev && env.TOKEN != '' }}
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          OK: ${{ steps.probe.outputs.ok }}
+          SITE: ${{ steps.probe.outputs.site }}
+          API: ${{ steps.probe.outputs.api }}
+        run: |
+          if [ "$OK" = 1 ]; then MSG="✅ waw.kz қайта жұмыс істеп тұр (сайт $SITE, API $API)"; else MSG="🔴 waw.kz ЖАУАП БЕРМЕЙДІ: сайт HTTP $SITE, API HTTP $API — $(date -u +%H:%M) UTC. Тексеру: ssh → systemctl status waw-api; journalctl -u waw-api -n 50"; fi
+          curl -s -m 10 -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" --data-urlencode "chat_id=$CHAT" --data-urlencode "text=$MSG" >/dev/null || true
+      - name: Backup stale alert (once a day at 09:00 UTC run)
+        if: ${{ env.TOKEN != '' && steps.probe.outputs.bk != '' }}
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BK: ${{ steps.probe.outputs.bk }}
+        run: |
+          H=$(date -u +%H); MI=$(date -u +%M)
+          if [ "$H" = "09" ] && [ "$MI" -lt 10 ] && { [ "$BK" = "-1" ] || [ "$BK" -gt 30 ]; }; then
+            curl -s -m 10 -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" --data-urlencode "chat_id=$CHAT" --data-urlencode "text=⚠️ waw.kz резервтік көшірме ескірген немесе қате (соңғысы $BK сағат бұрын). Тексеру: /var/log/waw-backup.log" >/dev/null || true
+          fi
       - name: Commit
         run: |
           git config user.name 'waw-status-bot'; git config user.email 'bot@waw.kz'
-          git add history summary.json; git commit -m "check $(date -u +%Y-%m-%dT%H:%MZ)" || exit 0; git push
+          git add history summary.json; git commit -m "check $(date -u +%Y-%m-%dT%H:%MZ)" || exit 0
+          git pull --rebase -q || true; git push
