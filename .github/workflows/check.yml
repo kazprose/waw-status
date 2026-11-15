@@ -3,6 +3,11 @@ on:
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
+    inputs:
+      test_alert:
+        description: 'Telegram сынақ хабарын жіберу (secrets тексеру)'
+        type: boolean
+        default: false
 permissions:
   contents: write
 concurrency:
@@ -30,6 +35,18 @@ jobs:
           PREV=$(node -e "const fs=require('fs');const a=JSON.parse(fs.readFileSync('$F','utf8'));const p=a[a.length-2];console.log(p?(p.site===200&&p.api===200?1:0):1)")
           echo "ok=$OK" >> "$GITHUB_OUTPUT"; echo "prev=$PREV" >> "$GITHUB_OUTPUT"; echo "site=$S" >> "$GITHUB_OUTPUT"; echo "api=$A" >> "$GITHUB_OUTPUT"; echo "bk=$BK" >> "$GITHUB_OUTPUT"
           echo "site=$S api=$A db=$DB backup_h=$BK ms=$((END-START))"
+      - name: Test alert (manual)
+        if: ${{ github.event.inputs.test_alert == 'true' }}
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SITE: ${{ steps.probe.outputs.site }}
+          API: ${{ steps.probe.outputs.api }}
+        run: |
+          [ -n "$TOKEN" ] && [ -n "$CHAT" ] || { echo "::error::TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID secrets жоқ"; exit 1; }
+          R=$(curl -s -m 10 -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" --data-urlencode "chat_id=$CHAT" --data-urlencode "text=🧪 waw.kz монитор сынағы: ескерту арнасы жұмыс істейді (сайт $SITE, API $API). Құлағанда 🔴, қайта көтерілгенде ✅ хабар келеді.")
+          echo "$R" | grep -q '"ok":true' || { echo "::error::Telegram жібере алмады: $R"; exit 1; }
+          echo "test alert sent"
       - name: Alert (Telegram) on failure or recovery
         if: ${{ steps.probe.outputs.ok != steps.probe.outputs.prev && env.TOKEN != '' }}
         env:
